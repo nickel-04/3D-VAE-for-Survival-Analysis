@@ -1,3 +1,4 @@
+
 import os
 from nbiatoolkit import NBIAClient
 
@@ -5,7 +6,7 @@ from nbiatoolkit import NBIAClient
 def download_data():
     filePattern = '%PatientID/%StudyInstanceUID/%SeriesInstanceUID/%InstanceNumber.dcm'
     downloadDir = './NBIA-Download'
-    nParallel = 5
+    nParallel = 10
     collection_name = "Colorectal-Liver-Metastases"
 
 

@@ -22,6 +22,62 @@ print("len(train_loader)",len(train_loader))
 print("len(test_loader)",len(test_loader))
 
 
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+class Encoder3D(nn.Module):
+    def __init__(self, in_channels, base_channels):
+        super(Encoder3D, self).__init__()
+        
+        self.encoder = nn.Sequential(
+            nn.Conv3d(in_channels, base_channels, kernel_size=3, padding=1),
+            nn.BatchNorm3d(base_channels),
+            nn.ReLU(inplace=True),
+            nn.Conv3d(base_channels, base_channels, kernel_size=3, padding=1),
+            nn.BatchNorm3d(base_channels),
+            nn.ReLU(inplace=True),
+            nn.MaxPool3d(kernel_size=2)  # Downsample by 2
+        )
+    
+    def forward(self, x):
+        return self.encoder(x)
+class Decoder3D(nn.Module):
+    def __init__(self, in_channels, out_channels):
+        super(Decoder3D, self).__init__()
+        
+        self.decoder = nn.Sequential(
+            nn.ConvTranspose3d(in_channels, out_channels, kernel_size=2, stride=2),  # Upsample by 2
+            nn.Conv3d(out_channels, out_channels, kernel_size=3, padding=1),
+            nn.BatchNorm3d(out_channels),
+            nn.ReLU(inplace=True),
+            nn.Conv3d(out_channels, out_channels, kernel_size=3, padding=1),
+            nn.BatchNorm3d(out_channels),
+            nn.ReLU(inplace=True),
+        )
+    
+    def forward(self, z):
+        return self.decoder(z)
+
+class TimeDecoder(nn.Module):
+    def __init__(self, input_dim):
+        super(TimeDecoder, self).__init__()
+        # Intermediate dimension
+        intermediate_dim = input_dim * 2  # You can adjust this multiplier as necessary
+        
+        # Define a series of Linear layers and ReLUs
+        self.layers = nn.Sequential(
+            nn.Linear(input_dim, intermediate_dim),
+            nn.ReLU(),
+            nn.Linear(intermediate_dim, intermediate_dim // 2),
+            nn.ReLU(),
+            nn.Linear(intermediate_dim // 2, 2)  # Outputs the shape and scale parameters
+        )
+    
+    def forward(self, z):
+        return self.layers(z)
+
+
 
 class LatentSpaceGaussian(nn.Module):
     def __init__(self, latent_dim):
@@ -134,86 +190,211 @@ class UNet3D(nn.Module):
         enc3 = self.enc3(enc2)
         enc4 = self.enc4(enc3)
         
+        out_data = {}  # Dictionary to store outputs
+        
         if self.latent_dim is not None:
+            # Flatten and pass through latent layers
             enc4_flat = enc4.view(enc4.size(0), -1)
             latent_params = self.latent_mu(enc4_flat)
             mu, log_var = self.latent_space.get_latent_params(latent_params)
             z = self.latent_space.sample_latent((mu, log_var))
+            
+            # Decode the latent sample
             enc4 = self.fc_decode(z)
             enc4 = enc4.view(enc4.size(0), -1, 8, 8, 4)
-            kl_divergence = self.latent_space.kl_loss((mu, log_var))
+            
+            # Predict Weibull parameters
             weibull_params = self.time_decoder(z)
+            
+            # Add to out_data dictionary
+            out_data['latent_sample'] = z
+            out_data['weibull_params'] = weibull_params
+            out_data['mu'] = mu
+            out_data['log_var'] = log_var
         
+        # Decoding path
         dec4 = self.dec4(enc4)
         dec3 = self.dec3(dec4 + enc3)
         dec2 = self.dec2(dec3 + enc2)
         dec1 = self.dec1(dec2 + enc1)
+        
+        # Reconstruction output
+        out_data['reconstruction'] = dec1
+        
+        return out_data
 
-        if self.latent_dim is not None:
-            return dec1, weibull_params, kl_divergence
-        else:
-            return dec1
 
-    def predict_time(self, x, just_cov=False, device=torch.device('cpu')):
+
+    def predict_time(self, images, device=torch.device('cpu')):
         """Predicts Weibull time distribution parameters and samples for survival analysis."""
-        if not just_cov:
-            cov = x.drop(['time', 'event'], axis=1)
-        else:
-            cov = x.copy()
+        self.eval()  # set model to evaluation mode
+        images = images.to(device)
 
-        # Forward pass to get latent representations and time predictions
-        out_params = self.forward(cov.to(device))
-        z = out_params[1]  # Assuming 'z' is returned as the second output
-        time_params = self.time_decoder(z)
+        # Forward pass to get output, Weibull params, and KL divergence
+        with torch.no_grad():
+            output, weibull_params, _ = self.forward(images)
 
         # Generate samples from time distribution
-        time_samples = sample_from_dist(time_params, [self.time_dist])
+        time_samples = sample_from_dist(weibull_params, ['weibull'])
 
         return {
-            'z': z.detach().cpu().numpy(),
-            'time_params': time_params.detach().cpu().numpy(),
+            'weibull_params': weibull_params.detach().cpu().numpy(),
             'time_samples': time_samples
         }
 
-    def predict_just_time(self, x):
+
+    def predict_just_time(self, images, device=torch.device('cpu')):
         """Predicts only the time samples based on the input covariates."""
-        return self.predict_time(x, just_cov=True)['time_samples']
+        return self.predict_time(images, device=device)['time_samples']
 
-
-    def calculate_risk(self, time_train, x_val, censor_val):
+    def calculate_risk(self, time_train, images_val, censor_val, device=torch.device('cpu')):
         """Calculate risk CDF at specified time points, compute C-index and IBS with confidence intervals."""
+        self.eval()  # set model to evaluation mode
         times = np.unique(time_train)
-        out_data = self.predict_time(x_val)
-        pred_risk = np.zeros([out_data['time_params'].shape[0], len(times)])
+        out_data = self.predict_time(images_val, device=device)
+        weibull_params = out_data['weibull_params']
+        pred_risk = np.zeros([weibull_params.shape[0], len(times)])
 
+        # Compute CDF for risk calculation based on Weibull parameters
         for sample in range(pred_risk.shape[0]):
-            if self.time_dist[0] == 'weibull':
-                alpha = out_data['time_params'][sample, 0]
-                lam = out_data['time_params'][sample, 1]
-                pred_risk[sample, :] = 1 - np.exp(-np.power(times / lam, alpha))
-            else:
-                raise RuntimeError('Unknown time distribution for risk calculation.')
+            alpha = weibull_params[sample, 0]
+            lam = weibull_params[sample, 1]
+            pred_risk[sample, :] = 1 - np.exp(-np.power(times / lam, alpha))
 
-        # Calculate C-index and IBS along with confidence intervals
-        ci, ibs = obtain_c_index(pd.DataFrame(1 - pred_risk.T, index=times), np.array(x_val['time']), censor_val)
-        ci_conf_intervals = bern_conf_interval(len(np.array(x_val['time'])), ci)
-        ibs_conf_intervals = bern_conf_interval(len(np.array(x_val['time'])), ibs, ibs=True)
+        # Calculate C-index and IBS with confidence intervals
+        ci, ibs = obtain_c_index(pd.DataFrame(1 - pred_risk.T, index=times), np.array(images_val['time']), censor_val)
+        ci_conf_intervals = bern_conf_interval(len(np.array(images_val['time'])), ci)
+        ibs_conf_intervals = bern_conf_interval(len(np.array(images_val['time'])), ibs, ibs=True)
 
         return ci_conf_intervals, ibs_conf_intervals
+
      
 
     def fit_epoch(self, data, optimizer, batch_size=64, device=torch.device('cpu')):
-        epoch_results = {'loss_tr': 0.0, 'loss_va': 0.0, 'kl_tr': 0.0, 'kl_va': 0.0, 'll_cov_tr': 0.0, 'll_cov_va': 0.0,
-                         'll_time_tr': 0.0, 'll_time_va': 0.0, 'ci_va': 0.0, 'ibs_va': 0.0}
+        epoch_results = {
+            'loss_tr': 0.0, 'loss_va': 0.0, 'kl_tr': 0.0, 'kl_va': 0.0,
+            'll_cov_tr': 0.0, 'll_cov_va': 0.0, 'll_time_tr': 0.0, 'll_time_va': 0.0,
+            'ci_va': 0.0, 'ibs_va': 0.0
+        }
 
-        for batch in range(n_batches):
+        train_loader, val_loader = data  # Expecting DataLoader for training and validation
+
+        # Train epoch
+        self.train()  # Set model to training mode
+        for batch_idx, (images, time_train, censor_train) in enumerate(train_loader):
+            images = images.to(device)
+            time_train = time_train.to(device).float()
+            censor_train = censor_train.to(device).float()
+
+            # Generate output parameters
+            out = self.feed_forward(images)
+
+            # Compute losses
+            optimizer.zero_grad()
+            loss_kl = self.latent_space.kl_loss(out['latent_params'])
+            loss_cov = self.rec_loss(out['cov_params'], images)  # Assuming image reconstruction
+            loss_time = self.time_loss(out['time_params'], time_train, censor_train)
+            loss = loss_kl + loss_cov + loss_time
+            loss.backward()
+            optimizer.step()
+
+            # Save data
+            epoch_results['loss_tr'] += loss.item()
+            epoch_results['kl_tr'] += loss_kl.item()
+            epoch_results['ll_cov_tr'] += loss_cov.item()
+            epoch_results['ll_time_tr'] += loss_time.item()
+
+        # Validation step
+        self.eval()
+        with torch.no_grad():
+            for images_val, time_val, censor_val in val_loader:
+                images_val = images_val.to(device)
+                time_val = time_val.to(device).float()
+                censor_val = censor_val.to(device).float()
+
+                out = self.feed_forward(images_val)
+                loss_kl = self.latent_space.kl_loss(out['latent_params'])
+                loss_cov = self.rec_loss(out['cov_params'], images_val)  # Assuming image reconstruction
+                loss_time = self.time_loss(out['time_params'], time_val, censor_val)
+                loss = loss_kl + loss_cov + loss_time
+
+                # Save data
+                epoch_results['loss_va'] += loss.item()
+                epoch_results['kl_va'] += loss_kl.item()
+                epoch_results['ll_cov_va'] += loss_cov.item()
+                epoch_results['ll_time_va'] += loss_time.item()
+
+        if self.early_stop:
+            self.early_stopper.early_stop(epoch_results['loss_va'])
+
+        return epoch_results
     
-
-
     def fit(self, data, train_params):
-        training_stats = {'loss_tr': [], 'loss_va': [], 'kl_tr': [], 'kl_va': [], 'll_cov_tr': [], 'll_cov_va': [],
-                          'll_time_tr': [], 'll_time_va': [], 'ci_va': [], 'ibs_va': []}
+    training_stats = {
+        'loss_tr': [], 'loss_va': [], 'kl_tr': [], 'kl_va': [],
+        'll_cov_tr': [], 'll_cov_va': [], 'll_time_tr': [], 'll_time_va': [],
+        'ci_va': [], 'ibs_va': []
+    }
 
-        optimizer = torch.optim.Adam(self.parameters(), lr=train_params['lr'])
+    optimizer = torch.optim.Adam(self.parameters(), lr=train_params['lr'])
 
-        for epoch in range(train_params['n_epochs']):       
+    epochs_ci = []
+    epochs_ibs = []
+    train_losses = []
+    valid_losses = []
+    best_model = None
+    best_loss = np.inf
+    best_ci = 0.0
+    best_ibs = 1.0
+    
+    # Expecting data to be a tuple of train_loader and val_loader
+    train_loader, val_loader = data
+
+    for epoch in range(train_params['n_epochs']):
+        self.kl_w = triangle_rate(epoch % 50, n_epochs_total=50, n_epochs_init=25, init_val=1 / 10000, ann_prop=0.5)
+        self.cov_w = triangle_rate(epoch % 50, n_epochs_total=50, n_epochs_init=15, init_val=1 / 10000, ann_prop=0.5)
+
+        # Perform training for one epoch
+        epoch_results = self.fit_epoch((train_loader, val_loader), optimizer, batch_size=train_params['batch_size'], device=train_params['device'])
+
+        # Calculate metrics
+        # Assuming that you have a way to calculate the CI and IBS from the validation dataset
+        epoch_results['ci_va'], epoch_results['ibs_va'] = self.calculate_risk(val_loader)
+
+        # Save training stats
+        train_losses.append(epoch_results['loss_tr'])
+        valid_losses.append(epoch_results['loss_va'])
+        epochs_ci.append(epoch_results['ci_va'])
+        epochs_ibs.append(epoch_results['ibs_va'])
+        for key in epoch_results.keys():
+            training_stats[key].append(epoch_results[key])
+
+        if epoch % 50 == 0:
+            print('Iteration = ', epoch,
+                  '; train loss = ', '{:.2f}'.format(epoch_results['loss_tr']),
+                  '; val loss = ', '{:.2f}'.format(epoch_results['loss_va']),
+                  '; ll_cov_tr = ', '{:.2f}'.format(np.sum(epoch_results['ll_cov_tr'])),
+                  '; ll_cov_va = ', '{:.2f}'.format(np.sum(epoch_results['ll_cov_va'])),
+                  '; kl_tr = ', '{:.2f}'.format(epoch_results['kl_tr']),
+                  '; kl_va = ', '{:.2f}'.format(epoch_results['kl_va']),
+                  '; ll_time_tr = ', '{:.2f}'.format(np.sum(epoch_results['ll_time_tr'])),
+                  '; ll_time_va = ', '{:.2f}'.format(np.sum(epoch_results['ll_time_va'])),
+                  '; C-index = ', '{:.4f}'.format(np.mean(epoch_results['ci_va'])))
+
+        # Save best model
+        if epoch_results['loss_va'] < best_loss:
+            best_loss = epoch_results['loss_va']
+            best_model = self.state_dict()
+            best_ci = epoch_results['ci_va']
+            best_ibs = epoch_results['ibs_va']
+
+        if self.early_stop and self.early_stopper.stop:
+            print('[INFO] Training early stop')
+            break
+
+    # Load the best model after training
+    self.load_state_dict(best_model)
+    training_stats['ci_va'].append(best_ci)
+    training_stats['ibs_va'].append(best_ibs)
+
+    return training_stats

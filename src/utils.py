@@ -1,6 +1,6 @@
 
 
-mport numpy as np
+import numpy as np
 
 import matplotlib.pyplot as plt
 
@@ -58,3 +58,46 @@ def sample_from_dist(params, distributions):
         else:
             raise NotImplementedError(f"Unknown distribution type: {dist}")
     return np.concatenate(samples, axis=0)
+import matplotlib.pyplot as plt
+import seaborn as sns
+from sklearn.decomposition import PCA
+import numpy as np
+
+def plot_latent_space(model, data_loader, device):
+    model.eval()  # Set the model to evaluation mode
+
+    z_space = []
+    risk_statuses = []
+
+    with torch.no_grad():
+        for images, survival_times, risk_status in data_loader:
+            images = images.to(device)
+
+            # Forward pass to get z (latent space)
+            _, weibull_params, _ = model(images)
+            z_space.append(weibull_params.detach().cpu().numpy())
+            risk_statuses.append(risk_status.detach().cpu().numpy())
+
+    z_space = np.concatenate(z_space, axis=0)
+    risk_statuses = np.concatenate(risk_statuses, axis=0)
+
+    # Dimensionality reduction
+    if z_space.shape[1] > 2:
+        pca = PCA(n_components=2)
+        z_space_reduced = pca.fit_transform(z_space)
+    else:
+        z_space_reduced = z_space
+
+    # Plotting
+    plt.figure(figsize=(10, 8))
+    scatter = plt.scatter(z_space_reduced[:, 0], z_space_reduced[:, 1], c=risk_statuses, cmap='viridis', alpha=0.6)
+    plt.title('Latent Space Visualization')
+    plt.xlabel('Z Dimension 1')
+    plt.ylabel('Z Dimension 2')
+    plt.colorbar(scatter, label='Risk Status')
+    plt.grid(True)
+    plt.savefig('latent_space_visualization.png')
+    plt.close()
+
+# Call this function after training the model
+plot_latent_space(model, train_loader, device)
