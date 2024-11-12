@@ -116,7 +116,7 @@ def get_data_loaders(root_dir, excel_path, batch_size=3, test_size=0.25):
         EnsureChannelFirstD(keys=["vol"]),
         Spacingd(keys=["vol"], pixdim=(1.0, 1.0, 1.0), mode='trilinear'),
         Orientationd(keys=["vol"], axcodes='RAS'),
-        ScaleIntensityRanged(keys=["vol"], a_min=-1000, a_max=400, b_min=0.0, b_max=1.0, clip=True),
+        ScaleIntensityRanged(keys=["vol"], a_min=-1000, a_max=1000, b_min=0.0, b_max=1.0, clip=True),
         Resized(keys=["vol"], spatial_size=(128, 128, 64)),
         ToTensord(keys=["vol"])
     ])
@@ -143,6 +143,40 @@ def get_data_loaders(root_dir, excel_path, batch_size=3, test_size=0.25):
 
     return train_loader, test_loader
 
+import torch
+
+def check_for_nans(dataloader):
+    """Check for NaN values in batches of data."""
+    nan_found = False
+
+    for batch_idx, (images, survival_times, vital_statuses) in enumerate(dataloader):
+        # Check for NaNs in image tensors
+        if torch.isnan(images).any():
+            print(f"NaN found in images at batch {batch_idx}")
+            nan_found = True
+
+        # Check for NaNs in survival times and vital statuses
+        if torch.isnan(torch.tensor(survival_times)).any():
+            print(f"NaN found in survival_times at batch {batch_idx}")
+            nan_found = True
+
+        if torch.isnan(torch.tensor(vital_statuses)).any():
+            print(f"NaN found in vital_statuses at batch {batch_idx}")
+            nan_found = True
+
+    if not nan_found:
+        print("No NaNs found in the DataLoader.")
+
+# # Example usage
+# if __name__ == '__main__':
+#     train_loader, test_loader = get_data_loaders(
+#         root_dir='NBIA-Download',
+#         excel_path='Dataset/crlm.xlsx',
+#         batch_size=2,
+#         test_size=0.25
+#     )
+
+
 #from Data_loader import get_data_loaders
 
 # Example usage
@@ -163,3 +197,9 @@ if __name__ == '__main__':
     )
     print("len(train_loader)",len(train_loader))
     print("len(test_loader)",len(test_loader))
+
+    print("Checking train_loader for NaNs:")
+    check_for_nans(train_loader)
+
+    print("\nChecking test_loader for NaNs:")
+    check_for_nans(test_loader)

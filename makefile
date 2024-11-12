@@ -2,7 +2,7 @@
 
 
 VENV_DIR = g15p3
-DOWNLOAD_SCRIPT = src/utils.py
+DOWNLOAD_SCRIPT = Dataset/custom_dataset.py
 REQUIREMENTS = requirements.txt
 
 
