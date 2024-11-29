@@ -3,6 +3,4 @@
 /g15p3/
 __pycache__/
 *.pyc
-/src/
-
 /output/*.pth
