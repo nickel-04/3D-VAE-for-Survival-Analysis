@@ -2,12 +2,13 @@
 \usepackage[english]{babel}
 \usepackage{authblk,graphicx,float}
 \usepackage{amssymb}
-
+\usepackage{array}
+\usepackage{longtable}
 \usepackage[letterpaper,top=2cm,bottom=2cm,left=3cm,right=3cm,marginparwidth=1.75cm]{geometry}
 \usepackage{amsmath}
 \usepackage{graphicx}
 \usepackage[colorlinks=true, allcolors=blue]{hyperref}
-\title{Project 3 Proposal  \\ \ \\IN9310 - Advanced Deep Learning for Image Analysis
+\title{Project 3 Report  \\ \ \\IN9310 - Advanced Deep Learning for Image Analysis
 }
 \author{Kumar, Nikhil}
 
@@ -19,7 +20,7 @@
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
-\section*{Project: Utilizing the Variational Bayes Autoencoder in Survival Analysis for 3D CT data}
+\section*{Project: Modified ELBO for Variational Autoencoders in Automated Survival Analysis of 3D CT Data in Oncology}
 
 
 \section{Introduction}
@@ -187,9 +188,12 @@ These equations provide the basis for integrating different distributions, such 
 
 \subsubsection{Marginal log-likelihood computation}
 In the SAVAE model, Gaussian distributions are used for real-numbered variables due to their symmetry and continuous nature for 3D images.
+\subsubsection{Contrastive loss}
+The contrastive loss is designed to process latent embeddings of patients classified into two groups: those who have experienced a particular event (e.g., death or disease recurrence) and those who are censored (no event observed within the study period). The loss function aims to train the model to learn embeddings that effectively separate these two classes in the latent space. \subsection*{Mathematical Representation} The contrastive loss for a pair of patients $i$ and $j$ can be expressed as follows: \[ \text{Contrastive Loss}_{i,j} = \begin{cases} \|z_i - z_j\|^2 & \text{if } y_i = y_j \\ \max(0, \text{margin} - \|z_i - z_j\|^2) & \text{if } y_i \neq y_j \end{cases} \] where: \begin{itemize} \item $z_i, z_j$ are the latent embeddings for patients $i$ and $j$. \item $y_i, y_j$ are the labels for patients $i$ and $j$, respectively. \item $\|\cdot\|_2$ denotes the Euclidean (L2) norm. \end{itemize} \subsection*{Interpretation} \begin{itemize} \item \textbf{Minimizing Intra-class Distances:} By minimizing the distances between embeddings of the same class, the model encourages compact clusters for each class in the latent space. \item \textbf{Maximizing Inter-class Distances:} By enforcing a minimum margin between embeddings of different classes, the model discourages overlap and ensures that the learned embeddings can differentiate between censored and event patients effectively. \end{itemize}
+
 
 \subsection{Training Details}
-The SAVAE model would be implemented using PyTorch and involves three DNNs: one encoder and two decoders, focusing on images and time parameters. The encoder features a simple Gaussian structure with a 3D Convolution layers similar to U-Net model, outputting to a fixed five-dimensional or 10-dimensional latent space. This space feeds into two decoders, with 3D Transpose convolution layer for image decoder and linear layers for time decoder. Training span 300 epochs with batch sizes of 64, including an Early Stop mechanism for efficiency.
+The SAVAE model would be implemented using PyTorch and involves three DNNs: one encoder and two decoders, focusing on images and time parameters. The encoder features a simple Gaussian structure with a 3D Convolution layers similar to U-Net model, outputting to a fixed  128-dimensional latent space. This space feeds into two decoders, with 3D Transpose convolution layer for image decoder and linear layers for time decoder. Training span 100 epochs with batch sizes of 64 and a learning rate of 0.0001 for Adam optimizer.
 
 
 \begin{figure}[H]
@@ -216,14 +220,182 @@ IBS(t_{\text{max}}) = \int_0^{t_{\text{max}}} BS(t) \, dt.
 
 These metrics collectively enhance the robust evaluation of SA models, incorporating accuracy, calibration, and adaptability to temporal changes in risk.
 
-\section{Results}
-\subsection{Experimental results}
+\section{Experimental Results}
+\subsection{Experiment: 1}
+\subsubsection{Objective}
+This experiment explores a setup where a Variational Autoencoder (VAE) is used for image reconstruction while also predicting the Weibull distribution parameters ($\alpha$ and $\lambda$) for survival analysis. The Weibull distribution provides a parametric form for the hazard function, enabling the model to predict the probability of an event occurring (e.g., failure or death) over time.
 
-Employing Variational Autoencoders, SAVAE enhances accuracy by leveraging latent variables to uncover complex data patterns. Tested on clinical datasets, the model demonstrated robustness and superior predictive capabilities. Preliminary results also suggest potential applicability to 3D image data, promising broader utility in medical research. The belief is to achieve a better C-index and IBS scores compare to the other models. Overall, SAVAE represents a significant advancement in the predictive modeling of patient outcomes.
+\subsubsection{Model Architecture}
+\textbf{Time Prediction (Weibull Parameters):}
+\begin{itemize}
+    \item A unidirectional edge is introduced from the latent space to a time-predicting module.
+    \item This module predicts the parameters of the Weibull distribution:
+    \begin{itemize}
+        \item $\alpha$ (shape parameter): Determines the hazard rate's trend over time.
+        \item $\lambda$ (scale parameter): Governs the scale of the survival function.
+    \end{itemize}
+    \item These parameters are essential for modeling the survival function $S(t)$ and hazard rate $h(t)$ based on a Weibull distribution.
+    \item The model's loss function incorporates the likelihood of the observed survival times, ensuring that the predicted Weibull parameters align with the survival data.
+\end{itemize}
 
-\subsection{Experimental discussion}
-SAVAE may achieve improved predictive accuracy and robustness compared to traditional models, highlighting its capacity to uncover complex data patterns missed by previous methodologies.  These results not only align with but also extend current literature by offering a flexible, more accurate model for diverse medical datasets. Overall, SAVAE's innovative approach sets a new benchmark in predictive modeling.
+\subsubsection{Hypothesis}
+\begin{itemize}
+    \item Using the Weibull distribution provides a strong parametric prior for the hazard function, which can improve the model's ability to generalize to unseen data.
+    \item The unidirectional edge ensures that the survival prediction module only leverages latent features relevant to predicting $\alpha$ and $\lambda$, without feedback influencing the image reconstruction process.
+\end{itemize}
 
+\subsubsection{Results and Insights}
+\begin{itemize}
+    \item The model successfully reconstructed images and predicted Weibull parameters that aligned with observed survival times.
+    \item The parametric nature of the Weibull distribution helped constrain the model, making it more interpretable but potentially less flexible.
+    \item The best C-index achieved is 0.62 and ibs score of 0.19.
+\end{itemize}
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=8cm]{figures/loss_exp1.png}
+    \caption{The loss is decreasing over the training epochs and converging well
+}
+    \label{loss}
+\end{figure}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=8cm]{figures/reconstruct_exp1.png}
+    \caption{Reconstructed images
+}
+    \label{Reconstructed images}
+\end{figure}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=8cm]{figures/metric_exp1.png}
+    \caption{CI and BI
+}
+    \label{CI and BI}
+\end{figure}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=8cm]{figures/latent_exp1.png}
+    \caption{Latent space visualization
+}
+    \label{Latent space visualization}
+\end{figure}
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=8cm]{figures/latent_exp1.1.png}
+    \caption{Latent space visualization after contrastive loss
+}
+    \label{Latent space visualization after contrastive loss}
+\end{figure}
+
+\subsection{Experiment 2: VAE with Hazard Node (Image Reconstruction + Non-Parametric Hazard Function)}
+
+\subsubsection{Objective}
+This experiment modifies the architecture to allow the model to predict a non-parametric hazard function, removing the constraints imposed by the Weibull distribution. The goal was to evaluate whether the model could learn the hazard function directly from the data, without relying on parametric assumptions.
+
+
+\textbf{Hazard Node:}
+\begin{itemize}
+    \item Instead of predicting Weibull parameters, a hazard node is introduced.
+    \item This node receives input from the latent representation and directly models the hazard function $h(t)$, which represents the instantaneous probability of an event at time $t$.
+    \item The hazard function is learned end-to-end by the neural network, allowing it to capture complex, non-parametric patterns in the survival data.
+    \item This approach removes the constraints of the Weibull distribution, enabling the model to learn more flexible relationships between the input features and survival outcomes.
+\end{itemize}
+
+\subsubsection{Hypothesis}
+\begin{itemize}
+    \item Removing the parametric Weibull constraint will allow the model to better capture complex patterns in the data, potentially improving predictive performance.
+    \item However, the loss of the parametric prior might make the model more prone to overfitting, especially with limited data.
+\end{itemize}
+
+\subsubsection{Results and Insights}
+\begin{itemize}
+    \item The model demonstrated the ability to reconstruct images while simultaneously learning a flexible, non-parametric hazard function.
+    \item Compared to Experiment 1, this approach offered greater flexibility in modeling survival outcomes but at the cost of reduced interpretability.
+    \item The model's performance depended heavily on the quality and quantity of the training data, as the absence of a strong prior made it more sensitive to noise and overfitting.
+    \item This method results in a higher IBS score and a nearly identical c-index, meaning it's performing worse than Experiment 1. Since this method has to learn the hazard function without any prior distribution, it requires more data to improve.
+\end{itemize}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=8cm]{figures/loss_exp2.png}
+    \caption{The loss is decreasing over the training epochs and converging well
+}
+    \label{loss}
+\end{figure}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=8cm]{figures/metric_exp2.png}
+    \caption{CI and BI
+}
+    \label{CI and BI}
+\end{figure}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=8cm]{figures/latent_exp2.png}
+    \caption{Latent space visualization against events as well as survival times
+}
+    \label{Latent space visualization}
+\end{figure}
+
+
+\subsection{Comparative Analysis}
+\begin{longtable}{|>{\raggedright\arraybackslash}p{5cm}|>{\raggedright\arraybackslash}p{6cm}|>{\raggedright\arraybackslash}p{6cm}|}
+\hline
+\textbf{Aspect} & \textbf{Experiment 1 (Weibull Parameters)} & \textbf{Experiment 2 (Non-Parametric Hazard Function)} \\
+\hline
+\endfirsthead
+
+\hline
+\textbf{Aspect} & \textbf{Experiment 1 (Weibull Parameters)} & \textbf{Experiment 2 (Non-Parametric Hazard Function)} \\
+\hline
+\endhead
+
+\hline
+\endfoot
+
+\hline
+\endlastfoot
+
+\textbf{Hazard Function} & Parametric (Weibull distribution) & Non-parametric (learned by the network) \\
+\hline
+\textbf{Interpretability} & High (parameters $\alpha$ and $\lambda$) & Moderate (hazard function harder to interpret) \\
+\hline
+\textbf{Flexibility} & Limited (constrained by Weibull form) & High (can model any distribution) \\
+\hline
+\textbf{Generalization} & Better generalization due to strong prior & May require more data to generalize well \\
+\hline
+\textbf{Overfitting Risk} & Lower (due to parametric assumption) & Higher (needs regularization and more data) \\
+\hline
+\end{longtable}
+
+
+
+Experiment 1 is suitable when interpretability and generalizability are priorities, especially in clinical contexts where the Weibull distribution's parameters provide meaningful insights. 
+
+Experiment 2 is advantageous when the data exhibits complex, non-Weibull survival patterns, and flexibility is crucial for capturing these relationships. However, this requires careful tuning and potentially more data to avoid overfitting.
+
+\section{Discussions}
+\subsection{Calibration vs Discrimination}
+
+The IBS score reflects calibration, focusing on the accuracy of survival probabilities across time, while the C-index measures discrimination, which is sensitive to the ranking of patients based on their survival times. The loss function used in Experiment 1 optimizes for calibration, which could explain the consistent improvement in IBS. However, the loss function may not directly target discrimination, which leads to the fluctuations observed in the C-index. This suggests that the model is better at estimating survival probabilities but not necessarily at ranking patients according to their survival times.
+
+\subsection{Latent Representation Quality}
+
+The model’s latent representation, learned through the encoder-decoder structure, may effectively capture features necessary for calibrating the survival function, which is why IBS improves. However, it may not capture enough of the discriminative features required for accurate ranking of patients, which explains why the C-index fluctuates. While the model is able to predict survival probabilities well, it struggles to rank patients consistently, leading to a variable C-index.
+
+\subsection{Image Reconstruction from Latent Samples}
+
+One additional observation is related to the image reconstruction task. The latent representations sampled in Experiment 1, while effective for survival prediction and calibration of the survival probabilities, were not ideal for image reconstruction. The reconstructed images did not perform as well as expected. This suggests that the latent space, which is designed to capture survival-related information, may not be fully expressive or sufficiently detailed for the task of image reconstruction.
+
+In other words, while the latent space is good at capturing the necessary features for survival modeling, it may lack the rich, detailed information needed for high-quality image reconstruction, where more intricate spatial features and structures are required. This trade-off highlights the challenge of optimizing a single model for both survival prediction and image reconstruction simultaneously.
+
+\subsection{Proposal for Improvement}
+
+Given the distinct nature of these two tasks, it would be beneficial to consider separate latent spaces for survival prediction and image reconstruction. By splitting the latent space into two components—one dedicated to capturing survival-related features and the other focused on image details—each task can be optimized more effectively. This approach could allow the model to maintain high performance for both survival prediction and image reconstruction, as each task would have its own dedicated space for learning the relevant features. Implementing this dual latent space strategy might improve the overall performance and quality of both tasks.
 
 
 \bibliographystyle{plain}  
