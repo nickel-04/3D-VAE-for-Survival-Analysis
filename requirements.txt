@@ -44,3 +44,4 @@ shap~=0.44.1
 monai[all] 
 openpyxl
 torchvision
+dicom2nifti
